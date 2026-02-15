@@ -727,6 +727,14 @@ async def save_custom_prompt(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
+    # Проверяем, что это текстовое сообщение
+    if not message.text:
+        await message.answer(
+            "⚠️ Пожалуйста, отправьте текст промпта.",
+            reply_markup=get_main_menu()
+        )
+        return
+
     if message.text == "/cancel":
         await message.answer(
             "Отменено",
@@ -740,9 +748,10 @@ async def save_custom_prompt(message: types.Message, state: FSMContext):
     settings['use_custom_prompt'] = True
     save_settings(user_id)
 
+    prompt_preview = message.text[:100] + ('...' if len(message.text) > 100 else '')
     await message.answer(
         f"✅ Промпт сохранен!\n\n"
-        f"Ваш промпт:\n{message.text[:100]}{'...' if len(message.text) > 100 else ''}",
+        f"Ваш промпт:\n{prompt_preview}",
         reply_markup=get_settings_menu(user_id)
     )
     await state.clear()
