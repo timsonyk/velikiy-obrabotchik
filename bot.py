@@ -59,7 +59,18 @@ def init_db():
             custom_prompt TEXT,
             aspect_ratio TEXT DEFAULT '1:1',
             dite_prompt_id TEXT DEFAULT 'shorten',
+            saved_prompt_id INTEGER,
             FOREIGN KEY (user_id) REFERENCES users(user_id)
+        )
+    ''')
+    # Таблица сохранённых промптов для каждого профиля
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS saved_prompts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            login_type TEXT NOT NULL,
+            prompt_name TEXT NOT NULL,
+            prompt_text TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     # Миграции
@@ -69,6 +80,8 @@ def init_db():
         cursor.execute("ALTER TABLE user_settings ADD COLUMN aspect_ratio TEXT DEFAULT '1:1'")
     if 'dite_prompt_id' not in columns:
         cursor.execute("ALTER TABLE user_settings ADD COLUMN dite_prompt_id TEXT DEFAULT 'shorten'")
+    if 'saved_prompt_id' not in columns:
+        cursor.execute("ALTER TABLE user_settings ADD COLUMN saved_prompt_id INTEGER")
     # Миграция: добавляем login_type в users
     cursor.execute("PRAGMA table_info(users)")
     user_columns = [col[1] for col in cursor.fetchall()]
@@ -128,7 +141,7 @@ def load_user_settings_from_db(user_id: int) -> dict:
     """Загрузить настройки пользователя из БД"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT variants_count, use_custom_prompt, custom_prompt, aspect_ratio, dite_prompt_id FROM user_settings WHERE user_id = ?", (user_id,))
+    cursor.execute("SELECT variants_count, use_custom_prompt, custom_prompt, aspect_ratio, dite_prompt_id, saved_prompt_id FROM user_settings WHERE user_id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
 
@@ -138,7 +151,8 @@ def load_user_settings_from_db(user_id: int) -> dict:
             'use_custom_prompt': bool(row[1]),
             'custom_prompt': row[2],
             'aspect_ratio': row[3] or '1:1',
-            'dite_prompt_id': row[4] or 'shorten'
+            'dite_prompt_id': row[4] or 'shorten',
+            'saved_prompt_id': row[5]
         }
     return None
 
@@ -147,11 +161,59 @@ def save_user_settings_to_db(user_id: int, settings: dict):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT OR REPLACE INTO user_settings (user_id, variants_count, use_custom_prompt, custom_prompt, aspect_ratio, dite_prompt_id)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (user_id, settings['variants_count'], int(settings['use_custom_prompt']), settings['custom_prompt'], settings.get('aspect_ratio', '1:1'), settings.get('dite_prompt_id', 'shorten')))
+        INSERT OR REPLACE INTO user_settings (user_id, variants_count, use_custom_prompt, custom_prompt, aspect_ratio, dite_prompt_id, saved_prompt_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', (user_id, settings['variants_count'], int(settings['use_custom_prompt']), settings['custom_prompt'], settings.get('aspect_ratio', '1:1'), settings.get('dite_prompt_id', 'shorten'), settings.get('saved_prompt_id')))
     conn.commit()
     conn.close()
+
+# === ФУНКЦИИ ДЛЯ СОХРАНЁННЫХ ПРОМПТОВ ===
+
+def get_saved_prompts(login_type: str) -> list:
+    """Получить все сохранённые промпты для профиля"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, prompt_name, prompt_text FROM saved_prompts WHERE login_type = ? ORDER BY created_at DESC",
+        (login_type,)
+    )
+    prompts = [{"id": row[0], "name": row[1], "text": row[2]} for row in cursor.fetchall()]
+    conn.close()
+    return prompts
+
+def save_prompt_to_db(login_type: str, prompt_name: str, prompt_text: str) -> int:
+    """Сохранить промпт в БД и вернуть его ID"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO saved_prompts (login_type, prompt_name, prompt_text) VALUES (?, ?, ?)",
+        (login_type, prompt_name, prompt_text)
+    )
+    prompt_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    logger.info(f"Сохранён промпт '{prompt_name}' для {login_type} (id={prompt_id})")
+    return prompt_id
+
+def get_saved_prompt_by_id(prompt_id: int) -> dict | None:
+    """Получить промпт по ID"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, login_type, prompt_name, prompt_text FROM saved_prompts WHERE id = ?", (prompt_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {"id": row[0], "login_type": row[1], "name": row[2], "text": row[3]}
+    return None
+
+def delete_saved_prompt(prompt_id: int):
+    """Удалить сохранённый промпт"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM saved_prompts WHERE id = ?", (prompt_id,))
+    conn.commit()
+    conn.close()
+    logger.info(f"Удалён промпт id={prompt_id}")
 
 # Инициализация БД
 init_db()
@@ -170,6 +232,8 @@ class UserStates(StatesGroup):
     waiting_for_custom_prompt = State()
     waiting_for_reference_photo = State()
     waiting_for_photo_with_reference = State()
+    waiting_for_prompt_name = State()  # Ввод имени для сохранения промпта
+    waiting_for_prompt_text = State()  # Ввод текста нового промпта
 
 # Хранилище настроек пользователей (кэш в памяти)
 user_settings = {}
@@ -194,7 +258,8 @@ def get_user_settings(user_id: int) -> dict:
                 'use_custom_prompt': False,  # Использовать кастомный промпт
                 'custom_prompt': None,  # Кастомный промпт
                 'aspect_ratio': '1:1',  # Соотношение сторон
-                'dite_prompt_id': 'shorten'  # Промпт для dite
+                'dite_prompt_id': 'shorten',  # Промпт для dite
+                'saved_prompt_id': None  # ID сохранённого промпта
             }
     return user_settings[user_id]
 
@@ -229,8 +294,24 @@ def get_main_menu() -> InlineKeyboardMarkup:
 def get_settings_menu(user_id: int) -> InlineKeyboardMarkup:
     """Меню настроек"""
     settings = get_user_settings(user_id)
+    login_type = get_user_login_type(user_id)
 
-    prompt_status = "Кастомный" if settings['use_custom_prompt'] else "Стандартный"
+    # Определяем статус промпта
+    saved_prompt_id = settings.get('saved_prompt_id')
+    if saved_prompt_id and not settings['use_custom_prompt']:
+        saved_prompt = get_saved_prompt_by_id(saved_prompt_id)
+        if saved_prompt:
+            prompt_status = f"💾 {saved_prompt['name'][:15]}"
+        else:
+            prompt_status = "Не выбран"
+    elif login_type == "dite" and not settings['use_custom_prompt']:
+        dite_id = settings.get('dite_prompt_id', 'shorten')
+        prompt_status = DITE_PROMPTS.get(dite_id, {}).get('name', 'Стандартный')
+    elif login_type == "veryberrylab" and not settings['use_custom_prompt']:
+        prompt_status = "Стандартный"
+    else:
+        prompt_status = "Не выбран"
+
     aspect_ratio = settings.get('aspect_ratio', '1:1')
 
     keyboard = [
@@ -274,30 +355,46 @@ def get_ratio_menu() -> InlineKeyboardMarkup:
 def get_prompt_menu(user_id: int) -> InlineKeyboardMarkup:
     """Меню выбора типа промпта"""
     settings = get_user_settings(user_id)
-    has_custom = settings['custom_prompt'] is not None
     login_type = get_user_login_type(user_id)
+    current_saved_id = settings.get('saved_prompt_id')
+    is_using_saved = current_saved_id is not None and not settings['use_custom_prompt']
 
     keyboard = []
 
     if login_type == "dite":
-        # Для dite - выбор из нескольких промптов
+        # Для dite - выбор из нескольких встроенных промптов
         current_dite_prompt = settings.get('dite_prompt_id', 'shorten')
         for prompt_id, prompt_data in DITE_PROMPTS.items():
-            mark = "✓ " if prompt_id == current_dite_prompt else ""
+            is_current = prompt_id == current_dite_prompt and not settings['use_custom_prompt'] and not is_using_saved
+            mark = "✓ " if is_current else ""
             keyboard.append([InlineKeyboardButton(
                 text=f"{mark}{prompt_data['name']}",
                 callback_data=f"dite_prompt_{prompt_id}"
             )])
     elif login_type == "veryberrylab":
         # Для veryberrylab - стандартный промпт
-        keyboard.append([InlineKeyboardButton(text="📝 Стандартный промпт", callback_data="prompt_default")])
+        is_default = not settings['use_custom_prompt'] and not is_using_saved
+        mark = "✓ " if is_default else ""
+        keyboard.append([InlineKeyboardButton(text=f"{mark}📝 Стандартный промпт", callback_data="prompt_default")])
     # Для bageatteria - нет стандартного промпта
 
-    if has_custom:
-        keyboard.append([InlineKeyboardButton(text="✏️ Использовать свой промпт", callback_data="prompt_custom")])
-        keyboard.append([InlineKeyboardButton(text="🔄 Изменить свой промпт", callback_data="prompt_new")])
-    else:
-        keyboard.append([InlineKeyboardButton(text="➕ Добавить свой промпт", callback_data="prompt_new")])
+    # Показываем сохранённые промпты для этого профиля
+    saved_prompts = get_saved_prompts(login_type)
+    if saved_prompts:
+        keyboard.append([InlineKeyboardButton(text="── Сохранённые ──", callback_data="noop")])
+        for sp in saved_prompts:
+            mark = "✓ " if sp['id'] == current_saved_id and is_using_saved else ""
+            keyboard.append([InlineKeyboardButton(
+                text=f"{mark}💾 {sp['name'][:20]}",
+                callback_data=f"use_saved_{sp['id']}"
+            )])
+
+    # Кнопка для создания нового сохраняемого промпта
+    keyboard.append([InlineKeyboardButton(text="➕ Создать промпт", callback_data="create_saved_prompt")])
+
+    # Управление сохранёнными промптами
+    if saved_prompts:
+        keyboard.append([InlineKeyboardButton(text="🗑 Удалить промпт", callback_data="delete_prompt_menu")])
 
     keyboard.append([InlineKeyboardButton(text="◀️ Назад", callback_data="settings")])
 
@@ -547,6 +644,7 @@ async def set_default_prompt(callback: types.CallbackQuery):
 
     settings = get_user_settings(user_id)
     settings['use_custom_prompt'] = False
+    settings['saved_prompt_id'] = None  # Сбрасываем сохранённый промпт
     save_settings(user_id)
 
     await callback.message.edit_text(
@@ -571,6 +669,7 @@ async def set_dite_prompt(callback: types.CallbackQuery):
     settings = get_user_settings(user_id)
     settings['dite_prompt_id'] = prompt_id
     settings['use_custom_prompt'] = False  # Отключаем кастомный промпт
+    settings['saved_prompt_id'] = None  # Сбрасываем сохранённый промпт
     save_settings(user_id)
 
     prompt_name = DITE_PROMPTS[prompt_id]['name']
@@ -648,6 +747,174 @@ async def save_custom_prompt(message: types.Message, state: FSMContext):
     )
     await state.clear()
 
+# === ОБРАБОТЧИКИ ДЛЯ СОХРАНЁННЫХ ПРОМПТОВ ===
+
+@dp.callback_query(lambda c: c.data == "noop")
+async def handle_noop(callback: types.CallbackQuery):
+    """Ничего не делать (для разделителей)"""
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "create_saved_prompt")
+async def create_saved_prompt(callback: types.CallbackQuery, state: FSMContext):
+    """Начать создание сохраняемого промпта"""
+    if not await check_auth(callback.from_user.id):
+        await callback.answer("🚫 Доступ запрещен", show_alert=True)
+        return
+
+    await callback.message.answer(
+        "📝 Создание нового промпта\n\n"
+        "Шаг 1/2: Введите НАЗВАНИЕ для промпта.\n"
+        "Например: 'Светлый фон', 'Ретро стиль', 'Каталожное фото'\n\n"
+        "Для отмены отправьте /cancel"
+    )
+    await state.set_state(UserStates.waiting_for_prompt_name)
+    await callback.answer()
+
+@dp.message(UserStates.waiting_for_prompt_name)
+async def handle_prompt_name(message: types.Message, state: FSMContext):
+    """Получить имя промпта"""
+    user_id = message.from_user.id
+    if not await check_auth(user_id):
+        await message.answer("🚫 Доступ запрещен.")
+        await state.clear()
+        return
+
+    if message.text == "/cancel":
+        await message.answer("Отменено", reply_markup=get_main_menu())
+        await state.clear()
+        return
+
+    prompt_name = message.text.strip()[:50]  # Ограничиваем длину имени
+    await state.update_data(prompt_name=prompt_name)
+
+    await message.answer(
+        f"✅ Название: {prompt_name}\n\n"
+        "Шаг 2/2: Теперь введите ТЕКСТ промпта.\n"
+        "Опишите, как нужно обработать изображение.\n\n"
+        "Для отмены отправьте /cancel"
+    )
+    await state.set_state(UserStates.waiting_for_prompt_text)
+
+@dp.message(UserStates.waiting_for_prompt_text)
+async def handle_prompt_text(message: types.Message, state: FSMContext):
+    """Получить текст промпта и сохранить"""
+    user_id = message.from_user.id
+    if not await check_auth(user_id):
+        await message.answer("🚫 Доступ запрещен.")
+        await state.clear()
+        return
+
+    if message.text == "/cancel":
+        await message.answer("Отменено", reply_markup=get_main_menu())
+        await state.clear()
+        return
+
+    state_data = await state.get_data()
+    prompt_name = state_data.get('prompt_name', 'Без названия')
+    prompt_text = message.text
+
+    login_type = get_user_login_type(user_id)
+    prompt_id = save_prompt_to_db(login_type, prompt_name, prompt_text)
+
+    # Автоматически выбираем созданный промпт
+    settings = get_user_settings(user_id)
+    settings['saved_prompt_id'] = prompt_id
+    settings['use_custom_prompt'] = False
+    save_settings(user_id)
+
+    await message.answer(
+        f"✅ Промпт '{prompt_name}' сохранён!\n\n"
+        f"Текст:\n{prompt_text[:100]}{'...' if len(prompt_text) > 100 else ''}\n\n"
+        f"Этот промпт теперь доступен всем пользователям профиля {login_type}.",
+        reply_markup=get_settings_menu(user_id)
+    )
+    await state.clear()
+
+@dp.callback_query(lambda c: c.data.startswith("use_saved_"))
+async def use_saved_prompt(callback: types.CallbackQuery):
+    """Использовать сохранённый промпт"""
+    user_id = callback.from_user.id
+    if not await check_auth(user_id):
+        await callback.answer("🚫 Доступ запрещен", show_alert=True)
+        return
+
+    prompt_id = int(callback.data.replace("use_saved_", ""))
+    saved_prompt = get_saved_prompt_by_id(prompt_id)
+
+    if not saved_prompt:
+        await callback.answer("Промпт не найден", show_alert=True)
+        return
+
+    settings = get_user_settings(user_id)
+    settings['saved_prompt_id'] = prompt_id
+    settings['use_custom_prompt'] = False
+    save_settings(user_id)
+
+    await callback.message.edit_text(
+        f"✅ Выбран промпт: {saved_prompt['name']}",
+        reply_markup=get_settings_menu(user_id)
+    )
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "delete_prompt_menu")
+async def show_delete_prompt_menu(callback: types.CallbackQuery):
+    """Показать меню удаления промптов"""
+    user_id = callback.from_user.id
+    if not await check_auth(user_id):
+        await callback.answer("🚫 Доступ запрещен", show_alert=True)
+        return
+
+    login_type = get_user_login_type(user_id)
+    saved_prompts = get_saved_prompts(login_type)
+
+    if not saved_prompts:
+        await callback.answer("Нет сохранённых промптов", show_alert=True)
+        return
+
+    keyboard = []
+    for sp in saved_prompts:
+        keyboard.append([InlineKeyboardButton(
+            text=f"🗑 {sp['name'][:25]}",
+            callback_data=f"delete_saved_{sp['id']}"
+        )])
+    keyboard.append([InlineKeyboardButton(text="◀️ Назад", callback_data="change_prompt_mode")])
+
+    await callback.message.edit_text(
+        "Выберите промпт для удаления:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=keyboard)
+    )
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data.startswith("delete_saved_"))
+async def delete_saved_prompt_handler(callback: types.CallbackQuery):
+    """Удалить сохранённый промпт"""
+    user_id = callback.from_user.id
+    if not await check_auth(user_id):
+        await callback.answer("🚫 Доступ запрещен", show_alert=True)
+        return
+
+    prompt_id = int(callback.data.replace("delete_saved_", ""))
+    saved_prompt = get_saved_prompt_by_id(prompt_id)
+
+    if not saved_prompt:
+        await callback.answer("Промпт не найден", show_alert=True)
+        return
+
+    prompt_name = saved_prompt['name']
+    delete_saved_prompt(prompt_id)
+
+    # Если удалённый промпт был выбран, сбрасываем настройку
+    settings = get_user_settings(user_id)
+    if settings.get('saved_prompt_id') == prompt_id:
+        settings['saved_prompt_id'] = None
+        save_settings(user_id)
+
+    await callback.message.edit_text(
+        f"✅ Промпт '{prompt_name}' удалён",
+        reply_markup=get_settings_menu(user_id)
+    )
+    await callback.answer()
+
 @dp.message(UserStates.waiting_for_reference_photo, lambda m: m.photo or (m.document and m.document.mime_type and m.document.mime_type.startswith('image/')))
 async def handle_reference_photo(message: types.Message, state: FSMContext):
     """Обработка референсного фото"""
@@ -722,15 +989,20 @@ async def handle_photo_with_reference(message: types.Message, state: FSMContext)
             aspect_ratio = settings.get('aspect_ratio', '1:1')
 
             # Определяем промпт
-            if settings['use_custom_prompt'] and settings['custom_prompt']:
+            login_type = get_user_login_type(user_id)
+            saved_prompt_id = settings.get('saved_prompt_id')
+
+            if saved_prompt_id and not settings['use_custom_prompt']:
+                # Используем сохранённый промпт
+                saved_prompt = get_saved_prompt_by_id(saved_prompt_id)
+                custom_prompt = saved_prompt['text'] if saved_prompt else None
+            elif settings['use_custom_prompt'] and settings['custom_prompt']:
                 custom_prompt = settings['custom_prompt']
+            elif login_type == "dite":
+                dite_prompt_id = settings.get('dite_prompt_id', 'shorten')
+                custom_prompt = DITE_PROMPTS.get(dite_prompt_id, {}).get('text')
             else:
-                login_type = get_user_login_type(user_id)
-                if login_type == "dite":
-                    dite_prompt_id = settings.get('dite_prompt_id', 'shorten')
-                    custom_prompt = DITE_PROMPTS.get(dite_prompt_id, {}).get('text')
-                else:
-                    custom_prompt = PROMPTS.get(login_type)
+                custom_prompt = PROMPTS.get(login_type)
 
             await processing_msg.edit_text(f"⏳ Генерирую {variants_count} вариантов с референсом...")
 
@@ -798,16 +1070,20 @@ async def handle_any_photo(message: types.Message, state: FSMContext):
             aspect_ratio = settings.get('aspect_ratio', '1:1')
 
             # Определяем какой промпт использовать
-            if settings['use_custom_prompt'] and settings['custom_prompt']:
+            login_type = get_user_login_type(user_id)
+            saved_prompt_id = settings.get('saved_prompt_id')
+
+            if saved_prompt_id and not settings['use_custom_prompt']:
+                # Используем сохранённый промпт
+                saved_prompt = get_saved_prompt_by_id(saved_prompt_id)
+                custom_prompt = saved_prompt['text'] if saved_prompt else None
+            elif settings['use_custom_prompt'] and settings['custom_prompt']:
                 custom_prompt = settings['custom_prompt']
+            elif login_type == "dite":
+                dite_prompt_id = settings.get('dite_prompt_id', 'shorten')
+                custom_prompt = DITE_PROMPTS.get(dite_prompt_id, {}).get('text')
             else:
-                # Используем промпт по login_type
-                login_type = get_user_login_type(user_id)
-                if login_type == "dite":
-                    dite_prompt_id = settings.get('dite_prompt_id', 'shorten')
-                    custom_prompt = DITE_PROMPTS.get(dite_prompt_id, {}).get('text')
-                else:
-                    custom_prompt = PROMPTS.get(login_type)  # None для bageatteria
+                custom_prompt = PROMPTS.get(login_type)  # None для bageatteria
 
             await processing_msg.edit_text(
                 f"⏳ Генерирую {variants_count} вариантов ({aspect_ratio})...\n"
