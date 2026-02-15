@@ -78,6 +78,36 @@ def generate_variant(image_part: types.Part, idx: int, prompt: str = None, aspec
         return None
 
 
+def generate_variant_with_reference(main_part: types.Part, ref_part: types.Part, idx: int, prompt: str = None, aspect_ratio: str = "1:1") -> bytes | None:
+    """Генерация варианта с референсом"""
+    try:
+        used_prompt = prompt if prompt else PROCESSING_PROMPT
+        full_prompt = (
+            "ВАЖНО: Первое изображение - РЕФЕРЕНС (образец стиля/цветов/освещения). "
+            "Второе - ОСНОВНОЕ для обработки с учётом референса.\n\n" + used_prompt
+        )
+        response = client.models.generate_content(
+            model="gemini-3-pro-image-preview",
+            contents=[full_prompt, ref_part, main_part],
+            config=types.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+                image_config=types.ImageConfig(aspect_ratio=aspect_ratio, image_size="4K"),
+            ),
+        )
+        for part in response.parts:
+            if part.inline_data is not None:
+                img = Image.open(io.BytesIO(part.inline_data.data))
+                output = io.BytesIO()
+                img.save(output, format='PNG')
+                png_bytes = output.getvalue()
+                logger.info(f"Вариант {idx} с референсом сгенерирован ({len(png_bytes) / 1024 / 1024:.1f} МБ)")
+                return png_bytes
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка варианта {idx} с референсом: {e}")
+        return None
+
+
 def prepare_image(image_bytes) -> tuple[bytes, str, types.Part]:
     """
     Подготовка изображения для обработки
@@ -169,6 +199,33 @@ async def process_image_stream(image_bytes: io.BytesIO, variants_count: int = 5,
 
     except Exception as e:
         logger.error(f"Критическая ошибка при обработке изображения: {e}")
+
+
+async def process_image_with_reference_stream(main_bytes: bytes, ref_bytes: bytes, variants_count: int = 5, custom_prompt: str = None, aspect_ratio: str = "1:1"):
+    """Асинхронный генератор для обработки с референсом"""
+    try:
+        _, _, main_part = prepare_image(main_bytes)
+        _, _, ref_part = prepare_image(ref_bytes)
+        logger.info(f"Генерация {variants_count} вариантов С РЕФЕРЕНСОМ")
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=min(variants_count, MAX_WORKERS)) as executor:
+            tasks = {}
+            for i in range(variants_count):
+                task = asyncio.ensure_future(loop.run_in_executor(executor, generate_variant_with_reference, main_part, ref_part, i + 1, custom_prompt, aspect_ratio))
+                tasks[task] = i + 1
+            pending = set(tasks.keys())
+            while pending:
+                done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    idx = tasks[task]
+                    try:
+                        result = task.result()
+                        if result:
+                            yield (idx, result)
+                    except Exception as e:
+                        logger.error(f"Ошибка варианта {idx}: {e}")
+    except Exception as e:
+        logger.error(f"Критическая ошибка с референсом: {e}")
 
 
 async def process_image(image_bytes: io.BytesIO, variants_count: int = 5, custom_prompt: str = None, aspect_ratio: str = "1:1") -> list[bytes]:
