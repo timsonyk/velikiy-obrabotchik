@@ -8,6 +8,11 @@ from PIL import Image
 import logging
 from pillow_heif import register_heif_opener
 
+
+class GoogleServerOverloadedError(Exception):
+    """Ошибка перегрузки серверов Google (503)"""
+    pass
+
 # Регистрируем поддержку HEIC/HEIF
 register_heif_opener()
 
@@ -74,6 +79,11 @@ def generate_variant(image_part: types.Part, idx: int, prompt: str = None, aspec
         return None
 
     except Exception as e:
+        error_str = str(e)
+        # Проверяем на ошибку 503 (сервер перегружен)
+        if "503" in error_str or "Service Unavailable" in error_str or "overloaded" in error_str.lower():
+            logger.error(f"Серверы Google перегружены (503): {e}")
+            raise GoogleServerOverloadedError("Серверы Google временно перегружены. Попробуйте позже.")
         logger.error(f"Ошибка при генерации варианта {idx}: {e}")
         return None
 
@@ -104,6 +114,11 @@ def generate_variant_with_reference(main_part: types.Part, ref_part: types.Part,
                 return png_bytes
         return None
     except Exception as e:
+        error_str = str(e)
+        # Проверяем на ошибку 503 (сервер перегружен)
+        if "503" in error_str or "Service Unavailable" in error_str or "overloaded" in error_str.lower():
+            logger.error(f"Серверы Google перегружены (503): {e}")
+            raise GoogleServerOverloadedError("Серверы Google временно перегружены. Попробуйте позже.")
         logger.error(f"Ошибка варианта {idx} с референсом: {e}")
         return None
 

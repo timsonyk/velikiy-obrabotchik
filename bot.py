@@ -13,7 +13,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from dotenv import load_dotenv
 import asyncio
 
-from image_processor import process_image_stream
+from image_processor import process_image_stream, GoogleServerOverloadedError
 from PIL import Image
 from io import BytesIO
 
@@ -1046,6 +1046,14 @@ async def handle_photo_with_reference(message: types.Message, state: FSMContext)
                 await processing_msg.edit_text("❌ Ошибка обработки.", reply_markup=get_main_menu())
             else:
                 await processing_msg.edit_text(f"✅ Готово! {sent_count} вариантов с референсом.", reply_markup=get_main_menu())
+        except GoogleServerOverloadedError:
+            logger.error("Серверы Google перегружены (503)")
+            await message.answer(
+                "⚠️ Серверы Google временно перегружены.\n"
+                "Это не ошибка бота — проблема на стороне Google.\n"
+                "Попробуйте отправить фото через несколько минут.",
+                reply_markup=get_main_menu()
+            )
         except Exception as e:
             logger.error(f"Ошибка: {e}")
             await message.answer(f"❌ Ошибка: {str(e)}", reply_markup=get_main_menu())
@@ -1151,6 +1159,14 @@ async def handle_any_photo(message: types.Message, state: FSMContext):
                 reply_markup=get_main_menu()
             )
 
+        except GoogleServerOverloadedError:
+            logger.error("Серверы Google перегружены (503)")
+            await message.answer(
+                "⚠️ Серверы Google временно перегружены.\n"
+                "Это не ошибка бота — проблема на стороне Google.\n"
+                "Попробуйте отправить фото через несколько минут.",
+                reply_markup=get_main_menu()
+            )
         except Exception as e:
             logger.error(f"Ошибка при обработке фото: {e}")
             await message.answer(
