@@ -410,33 +410,48 @@ async def cmd_start(message: types.Message, state: FSMContext):
         await message.answer("🚫 Доступ запрещен.")
         return
 
-    # Проверяем, авторизован ли пользователь
+    # Показываем выбор профиля (для всех - новых и авторизованных)
+    user_name = message.from_user.first_name
     if user_id in authorized_users:
-        user_name = message.from_user.first_name
-        login_type = get_user_login_type(user_id)
+        current_login = get_user_login_type(user_id)
         await message.answer(
             f"👋 С возвращением, {user_name}!\n"
-            f"Ваш профиль: {login_type}\n\n"
-            "Выбери действие:",
-            reply_markup=get_main_menu()
+            f"Текущий профиль: {current_login}\n\n"
+            "Выберите профиль:",
+            reply_markup=get_login_choice_menu()
         )
-        await message.answer("⬇️", reply_markup=get_persistent_keyboard())
-        return
-
-    # Показываем выбор логина
-    await message.answer(
-        "👋 Добро пожаловать!\n\n"
-        "Выберите ваш профиль:",
-        reply_markup=get_login_choice_menu()
-    )
+    else:
+        await message.answer(
+            "👋 Добро пожаловать!\n\n"
+            "Выберите ваш профиль:",
+            reply_markup=get_login_choice_menu()
+        )
     await state.set_state(UserStates.waiting_for_login_choice)
 
 @dp.callback_query(lambda c: c.data.startswith("login_"))
 async def handle_login_choice(callback: types.CallbackQuery, state: FSMContext):
     """Обработка выбора логина"""
+    user_id = callback.from_user.id
     login_type = callback.data.replace("login_", "")
-    await state.update_data(chosen_login=login_type)
 
+    # Если пользователь уже авторизован - просто меняем профиль
+    if user_id in authorized_users:
+        username = callback.from_user.username
+        first_name = callback.from_user.first_name
+        save_user_to_db(user_id, username, first_name, 'authorized', login_type)
+        await state.clear()
+
+        await callback.message.answer(
+            f"✅ Профиль изменён на: {login_type}\n\n"
+            "Выбери действие:",
+            reply_markup=get_main_menu()
+        )
+        await callback.message.answer("⬇️", reply_markup=get_persistent_keyboard())
+        await callback.answer()
+        return
+
+    # Новый пользователь - запрашиваем пароль
+    await state.update_data(chosen_login=login_type)
     await callback.message.answer("🔐 Введите пароль:")
     await state.set_state(UserStates.waiting_for_password)
     await callback.answer()
@@ -455,6 +470,7 @@ async def check_password(message: types.Message, state: FSMContext):
     if message.text == AUTH_PASSWORD:
         # Пароль верный - авторизуем
         authorized_users.add(user_id)
+        blocked_users.discard(user_id)  # Убираем из заблокированных, если был там
         save_user_to_db(user_id, username, first_name, 'authorized', login_type)
         await state.clear()
 
