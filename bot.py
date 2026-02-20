@@ -652,15 +652,33 @@ async def change_prompt_mode(callback: types.CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "prompt_default")
 async def set_default_prompt(callback: types.CallbackQuery):
-    """Установить стандартный промпт"""
+    """Установить стандартный промпт или показать его текст при повторном нажатии"""
     user_id = callback.from_user.id
     if not await check_auth(user_id):
         await callback.answer("🚫 Доступ запрещен", show_alert=True)
         return
 
     settings = get_user_settings(user_id)
+    login_type = get_user_login_type(user_id)
+
+    # Если стандартный промпт уже выбран — показать его текст
+    is_default = not settings['use_custom_prompt'] and not settings.get('saved_prompt_id')
+    if is_default:
+        prompt_text = PROMPTS.get(login_type, "Промпт не задан")
+        await callback.message.edit_text(
+            f"📝 **Стандартный промпт**\n\n"
+            f"{prompt_text}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="change_prompt_mode")]
+            ]),
+            parse_mode="Markdown"
+        )
+        await callback.answer()
+        return
+
+    # Иначе — выбрать стандартный промпт
     settings['use_custom_prompt'] = False
-    settings['saved_prompt_id'] = None  # Сбрасываем сохранённый промпт
+    settings['saved_prompt_id'] = None
     save_settings(user_id)
 
     await callback.message.edit_text(
@@ -671,7 +689,7 @@ async def set_default_prompt(callback: types.CallbackQuery):
 
 @dp.callback_query(lambda c: c.data.startswith("dite_prompt_"))
 async def set_dite_prompt(callback: types.CallbackQuery):
-    """Выбор промпта для dite"""
+    """Выбор промпта для dite или показ его текста при повторном нажатии"""
     user_id = callback.from_user.id
     if not await check_auth(user_id):
         await callback.answer("🚫 Доступ запрещен", show_alert=True)
@@ -683,14 +701,34 @@ async def set_dite_prompt(callback: types.CallbackQuery):
         return
 
     settings = get_user_settings(user_id)
+    prompt_data = DITE_PROMPTS[prompt_id]
+
+    # Если этот промпт уже выбран — показать его текст
+    current_dite = settings.get('dite_prompt_id', 'shorten')
+    is_current = (prompt_id == current_dite and
+                  not settings['use_custom_prompt'] and
+                  not settings.get('saved_prompt_id'))
+
+    if is_current:
+        await callback.message.edit_text(
+            f"📝 **{prompt_data['name']}**\n\n"
+            f"{prompt_data['text']}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="change_prompt_mode")]
+            ]),
+            parse_mode="Markdown"
+        )
+        await callback.answer()
+        return
+
+    # Иначе — выбрать этот промпт
     settings['dite_prompt_id'] = prompt_id
-    settings['use_custom_prompt'] = False  # Отключаем кастомный промпт
-    settings['saved_prompt_id'] = None  # Сбрасываем сохранённый промпт
+    settings['use_custom_prompt'] = False
+    settings['saved_prompt_id'] = None
     save_settings(user_id)
 
-    prompt_name = DITE_PROMPTS[prompt_id]['name']
     await callback.message.edit_text(
-        f"✅ Выбран промпт: {prompt_name}",
+        f"✅ Выбран промпт: {prompt_data['name']}",
         reply_markup=get_settings_menu(user_id)
     )
     await callback.answer()
@@ -857,7 +895,7 @@ async def handle_prompt_text(message: types.Message, state: FSMContext):
 
 @dp.callback_query(lambda c: c.data.startswith("use_saved_"))
 async def use_saved_prompt(callback: types.CallbackQuery):
-    """Использовать сохранённый промпт"""
+    """Использовать сохранённый промпт или показать его текст при повторном нажатии"""
     user_id = callback.from_user.id
     if not await check_auth(user_id):
         await callback.answer("🚫 Доступ запрещен", show_alert=True)
@@ -871,6 +909,21 @@ async def use_saved_prompt(callback: types.CallbackQuery):
         return
 
     settings = get_user_settings(user_id)
+
+    # Если этот промпт уже выбран — показать его текст
+    if settings.get('saved_prompt_id') == prompt_id and not settings['use_custom_prompt']:
+        await callback.message.edit_text(
+            f"📝 **{saved_prompt['name']}**\n\n"
+            f"{saved_prompt['text']}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="change_prompt_mode")]
+            ]),
+            parse_mode="Markdown"
+        )
+        await callback.answer()
+        return
+
+    # Иначе — выбрать этот промпт
     settings['saved_prompt_id'] = prompt_id
     settings['use_custom_prompt'] = False
     save_settings(user_id)
