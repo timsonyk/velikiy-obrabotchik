@@ -31,7 +31,8 @@ logger = logging.getLogger(__name__)
 if GOOGLE_API_KEY:
     os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
 
-client = genai.Client()
+# Таймаут 2 минуты для запросов к Gemini (чтобы не висели вечно)
+client = genai.Client(http_options={'timeout': 120.0})
 
 
 def generate_variant(image_part: types.Part, idx: int, prompt: str = None, aspect_ratio: str = "1:1") -> bytes | None:
