@@ -75,7 +75,7 @@ def generate_variant(image_part: types.Part, idx: int, prompt: str = None, aspec
                 logger.info(f"Вариант {idx} успешно сгенерирован ({len(png_bytes) / 1024 / 1024:.1f} МБ)")
                 return png_bytes
 
-        logger.warning(f"Вариант {idx}: не получены данные изображения")
+        logger.error(f"Вариант {idx}: Gemini вернул 200 OK, но БЕЗ изображения (отказ генерации)")
         return None
 
     except Exception as e:
@@ -112,6 +112,7 @@ def generate_variant_with_reference(main_part: types.Part, ref_part: types.Part,
                 png_bytes = output.getvalue()
                 logger.info(f"Вариант {idx} с референсом сгенерирован ({len(png_bytes) / 1024 / 1024:.1f} МБ)")
                 return png_bytes
+        logger.error(f"Вариант {idx} с референсом: Gemini вернул 200 OK, но БЕЗ изображения (отказ генерации)")
         return None
     except Exception as e:
         error_str = str(e)
