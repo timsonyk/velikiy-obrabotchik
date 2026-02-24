@@ -271,7 +271,7 @@ def save_settings(user_id: int):
 def get_persistent_keyboard() -> ReplyKeyboardMarkup:
     """Постоянная клавиатура внизу экрана"""
     keyboard = [[KeyboardButton(text="🏠 Главное меню")]]
-    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True, is_persistent=True)
 
 def get_login_choice_menu() -> InlineKeyboardMarkup:
     """Меню выбора логина"""
