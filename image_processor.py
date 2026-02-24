@@ -31,8 +31,7 @@ logger = logging.getLogger(__name__)
 if GOOGLE_API_KEY:
     os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
 
-# Таймаут 2 минуты для запросов к Gemini (чтобы не висели вечно)
-client = genai.Client(http_options={'timeout': 120.0})
+client = genai.Client()
 
 
 def generate_variant(image_part: types.Part, idx: int, prompt: str = None, aspect_ratio: str = "1:1") -> bytes | None:
@@ -211,9 +210,13 @@ async def process_image_stream(image_bytes: io.BytesIO, variants_count: int = 5,
                         result = task.result()
                         if result:
                             yield (idx, result)
+                    except GoogleServerOverloadedError:
+                        raise  # Пробрасываем 503 ошибку наверх в bot.py
                     except Exception as e:
                         logger.error(f"Ошибка при получении результата варианта {idx}: {e}")
 
+    except GoogleServerOverloadedError:
+        raise  # Пробрасываем 503 ошибку наверх в bot.py
     except Exception as e:
         logger.error(f"Критическая ошибка при обработке изображения: {e}")
 
@@ -239,8 +242,12 @@ async def process_image_with_reference_stream(main_bytes: bytes, ref_bytes: byte
                         result = task.result()
                         if result:
                             yield (idx, result)
+                    except GoogleServerOverloadedError:
+                        raise  # Пробрасываем 503 ошибку наверх в bot.py
                     except Exception as e:
                         logger.error(f"Ошибка варианта {idx}: {e}")
+    except GoogleServerOverloadedError:
+        raise  # Пробрасываем 503 ошибку наверх в bot.py
     except Exception as e:
         logger.error(f"Критическая ошибка с референсом: {e}")
 
