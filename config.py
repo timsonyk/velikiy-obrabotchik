@@ -57,7 +57,7 @@ PROCESSING_PROMPT = PROMPTS["veryberrylab"]
 DEFAULT_VARIANTS_COUNT = 5
 
 # Модель Gemini (точно как в obrabor.py)
-GEMINI_MODEL = "gemini-3-pro-image-preview"
+GEMINI_MODEL = "gemini-3.1-flash-image-preview"
 
 # Настройки изображения (точно как в obrabor.py)
 IMAGE_ASPECT_RATIO = "1:1"

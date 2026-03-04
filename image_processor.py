@@ -53,7 +53,7 @@ def generate_variant(image_part: types.Part, idx: int, prompt: str = None, aspec
 
         # Используем точно такой же вызов, как в obrabor.py
         response = client.models.generate_content(
-            model="gemini-3-pro-image-preview",
+            model="gemini-3.1-flash-image-preview",
             contents=[used_prompt, image_part],
             config=types.GenerateContentConfig(
                 response_modalities=["IMAGE"],
@@ -97,7 +97,7 @@ def generate_variant_with_reference(main_part: types.Part, ref_part: types.Part,
             "Второе - ОСНОВНОЕ для обработки с учётом референса.\n\n" + used_prompt
         )
         response = client.models.generate_content(
-            model="gemini-3-pro-image-preview",
+            model="gemini-3.1-flash-image-preview",
             contents=[full_prompt, ref_part, main_part],
             config=types.GenerateContentConfig(
                 response_modalities=["IMAGE"],

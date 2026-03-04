@@ -39,7 +39,7 @@ image_part = types.Part.from_bytes(
 
 def generate_variant(idx: int) -> str | None:
     response = client.models.generate_content(
-        model="gemini-3-pro-image-preview",
+        model="gemini-3.1-flash-image-preview",
         contents=[prompt, image_part],
         config=types.GenerateContentConfig(
             response_modalities=["IMAGE"],
