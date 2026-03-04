@@ -1096,7 +1096,10 @@ async def handle_photo_with_reference(message: types.Message, state: FSMContext)
                 await message.answer_document(BufferedInputFile(img_bytes, f"result_{idx}.png"), caption=f"Вариант {idx} (полное качество)")
 
             if sent_count == 0:
-                await processing_msg.edit_text("❌ Ошибка обработки.", reply_markup=get_main_menu())
+                await processing_msg.edit_text("❌ Не удалось сгенерировать ни одного варианта. Попробуйте ещё раз.", reply_markup=get_main_menu())
+            elif sent_count < variants_count:
+                failed = variants_count - sent_count
+                await processing_msg.edit_text(f"⚠️ Готово! {sent_count} из {variants_count} ({failed} не удалось — ошибки API).", reply_markup=get_main_menu())
             else:
                 await processing_msg.edit_text(f"✅ Готово! {sent_count} вариантов с референсом.", reply_markup=get_main_menu())
         except GoogleServerOverloadedError:
@@ -1202,15 +1205,22 @@ async def handle_any_photo(message: types.Message, state: FSMContext):
 
             if sent_count == 0:
                 await processing_msg.edit_text(
-                    "❌ Ошибка при обработке изображения. Попробуйте еще раз.",
+                    "❌ Не удалось сгенерировать ни одного варианта. Попробуйте ещё раз.",
                     reply_markup=get_main_menu()
                 )
                 return
 
-            await processing_msg.edit_text(
-                f"✅ Готово! Отправлено {sent_count} вариантов.",
-                reply_markup=get_main_menu()
-            )
+            if sent_count < variants_count:
+                failed = variants_count - sent_count
+                await processing_msg.edit_text(
+                    f"⚠️ Готово! {sent_count} из {variants_count} ({failed} не удалось — ошибки API).",
+                    reply_markup=get_main_menu()
+                )
+            else:
+                await processing_msg.edit_text(
+                    f"✅ Готово! Отправлено {sent_count} вариантов.",
+                    reply_markup=get_main_menu()
+                )
 
         except GoogleServerOverloadedError:
             logger.error("Серверы Google перегружены (503)")
